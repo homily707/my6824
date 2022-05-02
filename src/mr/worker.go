@@ -1,10 +1,14 @@
 package mr
 
-import "fmt"
-import "log"
-import "net/rpc"
-import "hash/fnv"
-
+import (
+	"encoding/json"
+	"fmt"
+	"hash/fnv"
+	"io/ioutil"
+	"log"
+	"net/rpc"
+	"os"
+)
 
 //
 // Map functions return a slice of KeyValue.
@@ -13,6 +17,13 @@ type KeyValue struct {
 	Key   string
 	Value string
 }
+
+type ByKey []KeyValue
+
+// for sorting by key.
+func (a ByKey) Len() int           { return len(a) }
+func (a ByKey) Swap(i, j int)      { a[i], a[j] = a[j], a[i] }
+func (a ByKey) Less(i, j int) bool { return a[i].Key < a[j].Key }
 
 //
 // use ihash(key) % NReduce to choose the reduce
@@ -24,6 +35,47 @@ func ihash(key string) int {
 	return int(h.Sum32() & 0x7fffffff)
 }
 
+func Mapper(info Info, mapf func(string, string) []KeyValue) {
+
+	// read file into kv array
+	filename := info.FileName
+	file, err := os.Open(filename)
+	defer file.Close()
+	if err != nil {
+		log.Fatalf("cannot open %v", filename)
+	}
+	content, err := ioutil.ReadAll(file)
+	if err != nil {
+		log.Fatalf("cannot read %v", filename)
+	}
+	kva := mapf(filename, string(content))
+
+	// split kva into bucket
+	kvBucket := make([][]KeyValue, info.NReduce)
+	for _, kv := range kva {
+		hashValue := ihash(kv.Key) % info.NReduce
+		kvBucket[hashValue] = append(kvBucket[hashValue], kv)
+	}
+
+	// save to intermediate file
+	pwd, _ := os.Getwd()
+	for i := 0; i < info.NReduce; i++ {
+		tempFile, err := ioutil.TempFile(pwd, "mr-tmp-*")
+		if err != nil {
+			log.Fatal("create temp file error")
+		}
+		enc := json.NewEncoder(tempFile)
+		for _, kv := range kvBucket[i] {
+			err := enc.Encode(&kv)
+			if err != nil {
+				log.Fatalf("save kv to file error")
+			}
+		}
+		tempFile.Close()
+		filename = fmt.Sprintf("mr-%d-%d", info.Index, i)
+		os.Rename(tempFile.Name(), filename)
+	}
+}
 
 //
 // main/mrworker.go calls this function.
@@ -33,8 +85,7 @@ func Worker(mapf func(string, string) []KeyValue,
 
 	// Your worker implementation here.
 
-	// uncomment to send the Example RPC to the coordinator.
-	// CallExample()
+	// ask for job
 
 }
 

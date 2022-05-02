@@ -14,6 +14,15 @@ import "strconv"
 // and reply for an RPC.
 //
 
+type Stage int
+
+const (
+	InMap Stage = iota
+	InReduce
+	Wait
+	Exit
+)
+
 type ExampleArgs struct {
 	X int
 }
@@ -23,7 +32,6 @@ type ExampleReply struct {
 }
 
 // Add your RPC definitions here.
-
 
 // Cook up a unique-ish UNIX-domain socket name
 // in /var/tmp, for the coordinator.
