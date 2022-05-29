@@ -13,6 +13,22 @@ import "strconv"
 // example to show how to declare the arguments
 // and reply for an RPC.
 //
+type OrderType int
+type WorkerMessageType int
+type MasterStatus int
+
+const (
+	MapJob OrderType = iota
+	ReduceJob
+	Wait
+	End
+)
+
+const (
+	HeartBeat WorkerMessageType = iota
+	AskJob
+	Finished
+)
 
 type ExampleArgs struct {
 	X int
@@ -24,6 +40,20 @@ type ExampleReply struct {
 
 // Add your RPC definitions here.
 
+type Job struct {
+	Index    int
+	NReduce  int
+	Filename string
+}
+
+type MasterResponse struct {
+	jobType OrderType
+	order   Job
+}
+
+type WorkerRequest struct {
+	WorkerStatus WorkerMessageType
+}
 
 // Cook up a unique-ish UNIX-domain socket name
 // in /var/tmp, for the coordinator.
