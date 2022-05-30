@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io/ioutil"
 	"os"
+	"sort"
 	"time"
 )
 import "log"
@@ -18,6 +19,14 @@ type KeyValue struct {
 	Key   string
 	Value string
 }
+
+// for sorting by key.
+type ByKey []KeyValue
+
+// for sorting by key.
+func (a ByKey) Len() int           { return len(a) }
+func (a ByKey) Swap(i, j int)      { a[i], a[j] = a[j], a[i] }
+func (a ByKey) Less(i, j int) bool { return a[i].Key < a[j].Key }
 
 //
 // use ihash(key) % NReduce to choose the reduce
@@ -62,15 +71,58 @@ func handleOrder(response MasterResponse, mapf func(string, string) []KeyValue,
 	case MapJob:
 		return HandleMapOrder(response.order, mapf, reducef)
 	case ReduceJob:
-		return handleReduceOrder(response.order, mapf, reducef)
+		return HandleReduceOrder(response.order, mapf, reducef)
 	default:
 		return WorkerRequest{}, false
 	}
 }
 
-func handleReduceOrder(order Job, mapf func(string, string) []KeyValue,
+func HandleReduceOrder(order Job, mapf func(string, string) []KeyValue,
 	reducef func(string, []string) string) (WorkerRequest, bool) {
-	return WorkerRequest{WorkerStatus: Finished}, false
+
+	//read
+	dir, _ := os.Getwd()
+	kva := []KeyValue{}
+	for i := 0; i < order.NMap; i++ {
+		fileName := dir + fmt.Sprintf("/mr-%v-%v", i, order.Index)
+		file, err := os.Open(fileName)
+		if err != nil {
+			log.Fatalf("cannnot open %v", fileName)
+		}
+		dec := json.NewDecoder(file)
+		for {
+			var kv KeyValue
+			if err := dec.Decode(&kv); err != nil {
+				break
+			}
+			kva = append(kva, kv)
+		}
+		file.Close()
+	}
+
+	// reduce
+	sort.Sort(ByKey(kva))
+	tempFile, err := ioutil.TempFile(dir, "reduce-tmp")
+	if err != nil {
+		log.Fatalf("create temp file error %v", err)
+	}
+	for i := 0; i < len(kva); {
+		j := i + 1
+		for j < len(kva) && kva[i] == kva[j] {
+			j++
+		}
+		values := []string{}
+		for k := i; k < j; k++ {
+			values = append(values, kva[k].Value)
+		}
+		output := reducef(kva[i].Key, values)
+
+		fmt.Fprintf(tempFile, "%v %v\n", kva[i].Key, output)
+		i = j
+	}
+	os.Rename(tempFile.Name(), fmt.Sprintf("mr-out-%v", order.Index))
+	tempFile.Close()
+	return WorkerRequest{Finished}, false
 }
 
 func HandleMapOrder(order Job, mapf func(string, string) []KeyValue,
@@ -101,7 +153,7 @@ func HandleMapOrder(order Job, mapf func(string, string) []KeyValue,
 	for i, kva := range kvaa {
 		tempFile, err := ioutil.TempFile(dir, "mr-temp-")
 		if err != nil {
-			log.Fatal("create temp file error")
+			log.Fatalf("create temp file error %v", err)
 		}
 		enc := json.NewEncoder(tempFile)
 		for _, kv := range kva {

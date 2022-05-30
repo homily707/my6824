@@ -42,6 +42,7 @@ type ExampleReply struct {
 
 type Job struct {
 	Index    int
+	NMap     int
 	NReduce  int
 	Filename string
 }
