@@ -12,7 +12,7 @@ func main() {
 	mapf, reducef := loadPlugin("wc.so")
 	//request, finished := mr.HandleMapOrder(mr.Job{0, 8, 10, "pg-grimm.txt"}, mapf, reducef)
 	request, finished := mr.HandleReduceOrder(mr.Job{0, 1, 10, ""}, mapf, reducef)
-	fmt.Print(request.WorkerStatus, finished)
+	fmt.Print(request.MessageType, finished)
 }
 
 func loadPlugin(filename string) (func(string, string) []mr.KeyValue, func(string, []string) string) {

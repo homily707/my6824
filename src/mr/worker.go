@@ -47,12 +47,12 @@ func Worker(mapf func(string, string) []KeyValue,
 
 	// TODO  heartbeat
 
-	var request WorkerRequest = WorkerRequest{WorkerStatus: AskJob}
+	var request WorkerRequest = WorkerRequest{MessageType: AskJob}
 	// Your worker implementation here.
 	for !finished {
 		response := CallMaster(request)
 		request, finished = handleOrder(response, mapf, reducef)
-		if response.jobType == Wait {
+		if response.OrderType == Wait {
 			time.Sleep(1 * time.Second)
 		}
 	}
@@ -63,15 +63,16 @@ func Worker(mapf func(string, string) []KeyValue,
 
 func handleOrder(response MasterResponse, mapf func(string, string) []KeyValue,
 	reducef func(string, []string) string) (WorkerRequest, bool) {
-	switch response.jobType {
+	log.Printf("receive order. type %s, file %v ,%v", response.OrderType, response.Order.Filename)
+	switch response.OrderType {
 	case Wait:
-		return WorkerRequest{WorkerStatus: AskJob}, false
+		return WorkerRequest{MessageType: AskJob}, false
 	case End:
 		return WorkerRequest{}, true
 	case MapJob:
-		return HandleMapOrder(response.order, mapf, reducef)
+		return HandleMapOrder(response.Order, mapf, reducef)
 	case ReduceJob:
-		return HandleReduceOrder(response.order, mapf, reducef)
+		return HandleReduceOrder(response.Order, mapf, reducef)
 	default:
 		return WorkerRequest{}, false
 	}
@@ -81,7 +82,7 @@ func HandleReduceOrder(order Job, mapf func(string, string) []KeyValue,
 	reducef func(string, []string) string) (WorkerRequest, bool) {
 
 	//read
-	dir, _ := os.Getwd()
+	dir := getFilePath()
 	kva := []KeyValue{}
 	for i := 0; i < order.NMap; i++ {
 		fileName := dir + fmt.Sprintf("/mr-%v-%v", i, order.Index)
@@ -122,7 +123,7 @@ func HandleReduceOrder(order Job, mapf func(string, string) []KeyValue,
 	}
 	os.Rename(tempFile.Name(), fmt.Sprintf("mr-out-%v", order.Index))
 	tempFile.Close()
-	return WorkerRequest{Finished}, false
+	return WorkerRequest{Finished, order.Index}, false
 }
 
 func HandleMapOrder(order Job, mapf func(string, string) []KeyValue,
@@ -149,7 +150,7 @@ func HandleMapOrder(order Job, mapf func(string, string) []KeyValue,
 	}
 
 	// write
-	dir, _ := os.Getwd()
+	dir := getFilePath()
 	for i, kva := range kvaa {
 		tempFile, err := ioutil.TempFile(dir, "mr-temp-")
 		if err != nil {
@@ -165,7 +166,21 @@ func HandleMapOrder(order Job, mapf func(string, string) []KeyValue,
 		tempFile.Close()
 		os.Rename(tempFile.Name(), fmt.Sprintf("mr-%v-%v", order.Index, i))
 	}
-	return WorkerRequest{Finished}, false
+	log.Printf("[worker %v]: finished map job %v", os.Getpid(), order.Index)
+	return WorkerRequest{Finished, order.Index}, false
+}
+
+func getFilePath() string {
+	pwd, _ := os.Getwd()
+	return pwd + "/tmpfile"
+}
+
+func CallMaster(request WorkerRequest) MasterResponse {
+	response := MasterResponse{}
+
+	call("Coordinator.Order", &request, &response)
+
+	return response
 }
 
 //
@@ -195,14 +210,6 @@ func CallExample() {
 	} else {
 		fmt.Printf("call failed!\n")
 	}
-}
-
-func CallMaster(request WorkerRequest) MasterResponse {
-	response := MasterResponse{}
-
-	call("Coordinator.Order", &request, &response)
-
-	return response
 }
 
 //

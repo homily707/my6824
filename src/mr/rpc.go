@@ -6,7 +6,10 @@ package mr
 // remember to capitalize all names.
 //
 
-import "os"
+import (
+	"os"
+	"time"
+)
 import "strconv"
 
 //
@@ -15,12 +18,11 @@ import "strconv"
 //
 type OrderType int
 type WorkerMessageType int
-type MasterStatus int
 
 const (
-	MapJob OrderType = iota
+	Wait OrderType = iota
 	ReduceJob
-	Wait
+	MapJob
 	End
 )
 
@@ -41,20 +43,27 @@ type ExampleReply struct {
 // Add your RPC definitions here.
 
 type Job struct {
-	Index    int
-	NMap     int
-	NReduce  int
-	Filename string
+	Index        int
+	NMap         int
+	NReduce      int
+	Filename     string
+	AssignedTime time.Time
+	FinishedTime time.Time
 }
 
 type MasterResponse struct {
-	jobType OrderType
-	order   Job
+	OrderType OrderType
+	Order     Job
 }
 
 type WorkerRequest struct {
-	WorkerStatus WorkerMessageType
+	MessageType WorkerMessageType
+	Index       int
 }
+
+//func JobCopy(a *Job, b *Job) {
+//
+//}
 
 // Cook up a unique-ish UNIX-domain socket name
 // in /var/tmp, for the coordinator.
