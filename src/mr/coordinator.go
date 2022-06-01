@@ -116,7 +116,7 @@ func (c *Coordinator) checkMapJob() {
 			}
 		}
 	}
-	log.Printf("==== map job finished %v", finished)
+	//log.Printf("==== map job finished %v", finished)
 	if c.status == Mapping && finished == c.nMap {
 		close(c.mapChan)
 		c.status = Reducing
@@ -141,7 +141,7 @@ func (c *Coordinator) checkReduceJob() {
 			}
 		}
 	}
-	log.Printf("==== reduce job finished %v", finished)
+	//log.Printf("==== reduce job finished %v", finished)
 	if c.status == Reducing && finished == c.nReduce {
 		c.status = Over
 	}
@@ -164,7 +164,7 @@ func (c *Coordinator) dispatchMapOrder() *MasterResponse {
 		Order:     jobCopy,
 	}
 	c.jobMap.put(strconv.Itoa(jobCopy.Index), jobCopy)
-	log.Printf("[master]: dispatch map job %v, file %v", jobCopy.Index, jobCopy.Filename)
+	//log.Printf("[master]: dispatch map job %v, file %v", jobCopy.Index, jobCopy.Filename)
 	return &rep
 }
 
@@ -173,7 +173,7 @@ func (c *Coordinator) recordMap(index int) *MasterResponse {
 	if ok {
 		job.FinishedTime = time.Now()
 		c.jobMap.put(strconv.Itoa(index), job)
-		log.Printf("[master]: get map job %v finished", index)
+		//log.Printf("[master]: get map job %v finished", index)
 	}
 	return c.dispatchMapOrder()
 }
@@ -194,7 +194,7 @@ func (c *Coordinator) dispatchReduceOrder() *MasterResponse {
 		Order:     *job,
 	}
 	c.jobMap.put(strconv.Itoa(job.Index), *job)
-	log.Printf("[master]: dispatch reduce job %v, file %v", job.Index, job.Filename)
+	//log.Printf("[master]: dispatch reduce job %v, file %v", job.Index, job.Filename)
 	return &rep
 }
 
@@ -203,7 +203,7 @@ func (c *Coordinator) recordReduce(index int) *MasterResponse {
 	if ok {
 		job.FinishedTime = time.Now()
 		c.jobMap.put(strconv.Itoa(index), job)
-		log.Printf("[master]: get reduce job %v finished", index)
+		//log.Printf("[master]: get reduce job %v finished", index)
 	}
 	return c.dispatchReduceOrder()
 }

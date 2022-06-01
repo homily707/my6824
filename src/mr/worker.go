@@ -63,7 +63,7 @@ func Worker(mapf func(string, string) []KeyValue,
 
 func handleOrder(response MasterResponse, mapf func(string, string) []KeyValue,
 	reducef func(string, []string) string) (WorkerRequest, bool) {
-	log.Printf("receive order. type %s, file %v ,%v", response.OrderType, response.Order.Filename)
+	//log.Printf("receive order. type %s, file %v ,%v", response.OrderType, response.Order.Filename)
 	switch response.OrderType {
 	case Wait:
 		return WorkerRequest{MessageType: AskJob}, false
@@ -83,11 +83,11 @@ func HandleReduceOrder(order Job, mapf func(string, string) []KeyValue,
 
 	//read
 	dir, _ := os.Getwd()
-	log.Printf(dir + "| ")
+	//log.Printf(dir + "| ")
 	kva := []KeyValue{}
 	for i := 0; i < order.NMap; i++ {
 		fileName := dir + fmt.Sprintf("/mr-%v-%v", i, order.Index)
-		log.Print(fileName)
+		//log.Print(fileName)
 		file, err := os.Open(fileName)
 		if err != nil {
 			log.Fatalf("cannnot open %v", fileName)
@@ -168,7 +168,7 @@ func HandleMapOrder(order Job, mapf func(string, string) []KeyValue,
 		tempFile.Close()
 		os.Rename(tempFile.Name(), fmt.Sprintf("mr-%v-%v", order.Index, i))
 	}
-	log.Printf("[worker %v]: finished map job %v", os.Getpid(), order.Index)
+	//log.Printf("[worker %v]: finished map job %v", os.Getpid(), order.Index)
 	return WorkerRequest{Finished, order.Index}, false
 }
 
