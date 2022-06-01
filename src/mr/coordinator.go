@@ -20,12 +20,13 @@ const (
 )
 
 type Coordinator struct {
-	status  MasterStatus
-	nReduce int
-	nMap    int
-	files   []string
-	jobs    chan *Job
-	jobMap  RWMap
+	status     MasterStatus
+	nReduce    int
+	nMap       int
+	files      []string
+	mapChan    chan *Job
+	reduceChan chan *Job
+	jobMap     RWMap
 }
 
 // Your code here -- RPC handlers for the worker to call.
@@ -88,8 +89,9 @@ func (c *Coordinator) Done() bool {
 
 	switch c.status {
 	case Mapping:
-		go c.checkMapJob()
+		c.checkMapJob()
 	case Reducing:
+		c.checkReduceJob()
 	case Over:
 		ret = true
 	}
@@ -100,29 +102,84 @@ func (c *Coordinator) Done() bool {
 func (c *Coordinator) checkMapJob() {
 	finished := 0
 	for i := 0; i < c.nMap; i++ {
-		val, ok := c.jobMap.get(strconv.Itoa(i))
+		job, ok := c.jobMap.get(strconv.Itoa(i))
 		if ok {
-			job := val.(Job)
 			// if timeout
 			if !job.AssignedTime.IsZero() {
 				if job.FinishedTime.IsZero() && time.Now().Sub(job.AssignedTime) > time.Second*10 {
 					// send into chan to dispatch again
 					job.AssignedTime = time.Now()
-					c.jobs <- &job
+					c.mapChan <- &job
 				} else if !job.FinishedTime.IsZero() {
 					finished++
 				}
 			}
 		}
 	}
-	if finished == c.nMap {
-		c.initReduceJob()
+	log.Printf("==== map job finished %v", finished)
+	if c.status == Mapping && finished == c.nMap {
+		close(c.mapChan)
 		c.status = Reducing
+		c.initReduceJob()
+	}
+}
+
+func (c *Coordinator) checkReduceJob() {
+	finished := 0
+	for i := 0; i < c.nReduce; i++ {
+		job, ok := c.jobMap.get(strconv.Itoa(i))
+		if ok {
+			// if timeout
+			if !job.AssignedTime.IsZero() {
+				if job.FinishedTime.IsZero() && time.Now().Sub(job.AssignedTime) > time.Second*10 {
+					// send into chan to dispatch again
+					job.AssignedTime = time.Now()
+					c.reduceChan <- &job
+				} else if !job.FinishedTime.IsZero() {
+					finished++
+				}
+			}
+		}
+	}
+	log.Printf("==== reduce job finished %v", finished)
+	if c.status == Reducing && finished == c.nReduce {
+		c.status = Over
 	}
 }
 
 func (c *Coordinator) dispatchMapOrder() *MasterResponse {
-	job := <-c.jobs
+	job := <-c.mapChan
+	// no job in chan, go back and wait
+	if job == nil {
+		return &MasterResponse{
+			OrderType: Wait,
+			Order:     Job{},
+		}
+	}
+	// assign job and mark a start time
+	jobCopy := *job
+	jobCopy.AssignedTime = time.Now()
+	rep := MasterResponse{
+		OrderType: MapJob,
+		Order:     jobCopy,
+	}
+	c.jobMap.put(strconv.Itoa(jobCopy.Index), jobCopy)
+	log.Printf("[master]: dispatch map job %v, file %v", jobCopy.Index, jobCopy.Filename)
+	return &rep
+}
+
+func (c *Coordinator) recordMap(index int) *MasterResponse {
+	job, ok := c.jobMap.get(strconv.Itoa(index))
+	if ok {
+		job.FinishedTime = time.Now()
+		c.jobMap.put(strconv.Itoa(index), job)
+		log.Printf("[master]: get map job %v finished", index)
+	}
+	return c.dispatchMapOrder()
+}
+
+func (c *Coordinator) dispatchReduceOrder() *MasterResponse {
+	job := <-c.reduceChan
 	// no job in chan, go back and wait
 	if job == nil {
 		return &MasterResponse{
@@ -133,30 +190,22 @@ func (c *Coordinator) dispatchMapOrder() *MasterResponse {
 	// assign job and mark a start time
 	job.AssignedTime = time.Now()
 	rep := MasterResponse{
-		OrderType: MapJob,
+		OrderType: ReduceJob,
 		Order:     *job,
 	}
-	log.Printf("[master]: dispatch map job %v, file %v", job.Index, job.Filename)
+	c.jobMap.put(strconv.Itoa(job.Index), *job)
+	log.Printf("[master]: dispatch reduce job %v, file %v", job.Index, job.Filename)
 	return &rep
 }
 
-func (c *Coordinator) recordMap(index int) *MasterResponse {
-	val, ok := c.jobMap.get(strconv.Itoa(index))
+func (c *Coordinator) recordReduce(index int) *MasterResponse {
+	job, ok := c.jobMap.get(strconv.Itoa(index))
 	if ok {
-		job := val.(Job)
 		job.FinishedTime = time.Now()
 		c.jobMap.put(strconv.Itoa(index), job)
+		log.Printf("[master]: get reduce job %v finished", index)
 	}
-	log.Printf("[master]: get map job %v finished", index)
-	return c.dispatchMapOrder()
-}
-
-func (c *Coordinator) dispatchReduceOrder() *MasterResponse {
-	return nil
-}
-
-func (c *Coordinator) recordReduce(index int) *MasterResponse {
-	return nil
+	return c.dispatchReduceOrder()
 }
 
 func (c *Coordinator) initMapJob() {
@@ -172,24 +221,25 @@ func (c *Coordinator) initMapJob() {
 		jobs <- &job
 		jobMap.put(strconv.Itoa(i), job)
 	}
-	c.jobs = jobs
+	c.mapChan = jobs
 	c.jobMap = jobMap
 }
 
 func (c *Coordinator) initReduceJob() {
-	jobs := make(chan *Job, c.nReduce)
-	jobMap := NewRWMap()
+	reduceChan := make(chan *Job, c.nReduce)
+	c.jobMap.clear()
+	//jobMap := NewRWMap()
 	for i := 0; i < c.nReduce; i++ {
 		job := Job{
 			Index:   i,
 			NMap:    c.nMap,
 			NReduce: c.nReduce,
 		}
-		jobs <- &job
-		jobMap.put(strconv.Itoa(i), job)
+		reduceChan <- &job
+		c.jobMap.put(strconv.Itoa(i), job)
 	}
-	c.jobs = jobs
-	c.jobMap = jobMap
+	c.reduceChan = reduceChan
+	//c.jobMap = jobMap
 }
 
 //

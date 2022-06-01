@@ -82,10 +82,12 @@ func HandleReduceOrder(order Job, mapf func(string, string) []KeyValue,
 	reducef func(string, []string) string) (WorkerRequest, bool) {
 
 	//read
-	dir := getFilePath()
+	dir, _ := os.Getwd()
+	log.Printf(dir + "| ")
 	kva := []KeyValue{}
 	for i := 0; i < order.NMap; i++ {
 		fileName := dir + fmt.Sprintf("/mr-%v-%v", i, order.Index)
+		log.Print(fileName)
 		file, err := os.Open(fileName)
 		if err != nil {
 			log.Fatalf("cannnot open %v", fileName)
@@ -172,7 +174,7 @@ func HandleMapOrder(order Job, mapf func(string, string) []KeyValue,
 
 func getFilePath() string {
 	pwd, _ := os.Getwd()
-	return pwd + "/tmpfile"
+	return pwd
 }
 
 func CallMaster(request WorkerRequest) MasterResponse {
