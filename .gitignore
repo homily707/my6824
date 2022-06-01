@@ -2,3 +2,7 @@ pkg/
 api.key
 .api.key.trimmed
 *-handin.tar.gz
+/.idea/.gitignore
+/.idea/modules.xml
+/.idea/my6824.iml
+/.idea/vcs.xml

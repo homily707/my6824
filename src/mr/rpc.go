@@ -6,13 +6,31 @@ package mr
 // remember to capitalize all names.
 //
 
-import "os"
+import (
+	"os"
+	"time"
+)
 import "strconv"
 
 //
 // example to show how to declare the arguments
 // and reply for an RPC.
 //
+type OrderType int
+type WorkerMessageType int
+
+const (
+	Wait OrderType = iota
+	ReduceJob
+	MapJob
+	End
+)
+
+const (
+	HeartBeat WorkerMessageType = iota
+	AskJob
+	Finished
+)
 
 type ExampleArgs struct {
 	X int
@@ -24,6 +42,28 @@ type ExampleReply struct {
 
 // Add your RPC definitions here.
 
+type Job struct {
+	Index        int
+	NMap         int
+	NReduce      int
+	Filename     string
+	AssignedTime time.Time
+	FinishedTime time.Time
+}
+
+type MasterResponse struct {
+	OrderType OrderType
+	Order     Job
+}
+
+type WorkerRequest struct {
+	MessageType WorkerMessageType
+	Index       int
+}
+
+//func JobCopy(a *Job, b *Job) {
+//
+//}
 
 // Cook up a unique-ish UNIX-domain socket name
 // in /var/tmp, for the coordinator.
