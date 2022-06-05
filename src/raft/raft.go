@@ -64,7 +64,7 @@ type ApplyMsg struct {
 // A Go object implementing a single Raft peer.
 //
 type Raft struct {
-	mu        sync.Mutex          // Lock to protect shared access to this peer's state
+	mu        *sync.Mutex         // Lock to protect shared access to this peer's state
 	peers     []*labrpc.ClientEnd // RPC end points of all peers
 	persister *Persister          // Object to hold this peer's persisted state
 	me        int                 // this peer's index into peers[]
@@ -94,8 +94,10 @@ func (rf *Raft) GetState() (int, bool) {
 	var isleader bool
 	// Your code here (2A).
 	//rf.Logf("get state %v", rf.role)
+	rf.mu.Lock()
 	term = rf.currentTerm
 	isleader = rf.role == Leader
+	rf.mu.Unlock()
 	return term, isleader
 }
 
@@ -179,7 +181,7 @@ type RequestVoteReply struct {
 }
 
 type AppendEntriesArgs struct {
-	// A
+	// 2A
 	Term     int
 	LeaderId int
 }
@@ -194,18 +196,21 @@ type AppendEntriesReply struct {
 //
 
 func (rf *Raft) sendBeats() {
-	args := &AppendEntriesArgs{
-		Term:     rf.currentTerm,
-		LeaderId: rf.me,
-	}
-	reply := &AppendEntriesReply{}
-	rf.LogKey("re", "beats on")
 	for i, _ := range rf.peers {
 		if i == rf.me {
 			continue
 		}
+		rf.mu.Lock()
+		term := rf.currentTerm
+		rf.mu.Unlock()
+		args := &AppendEntriesArgs{
+			Term:     term,
+			LeaderId: rf.me,
+		}
+		reply := &AppendEntriesReply{}
+		rf.LogKey("re", "beats on")
 		rf.sendAppendEntries(i, "Raft.Beats", args, reply)
-		if !reply.Success && reply.Term > rf.currentTerm {
+		if !reply.Success && reply.Term > term {
 			rf.mu.Lock()
 			rf.LogfKey("beats", "leader out of time %v", reply.Term)
 			rf.role = Follower
@@ -225,61 +230,59 @@ func (rf *Raft) sendElection(args *RequestVoteArgs, index int) {
 }
 
 func (rf *Raft) election() {
-	rf.votedFor = -1
+	rf.mu.Lock()
+	rf.role = Candidate
 	rf.leader = -1
+	rf.votedFor = rf.me
+	rf.currentTerm++
+	rf.voteChan = make(chan *RequestVoteReply, len(rf.peers)-1)
+	rf.LogfKey("re", " candidate for term %v", rf.currentTerm)
+	args := &RequestVoteArgs{
+		Term:        rf.currentTerm,
+		CandidateId: rf.me,
+	}
+	rf.mu.Unlock()
 
-	if rf.votedFor < 0 && rf.leader < 0 {
+	for i, _ := range rf.peers {
+		if i != rf.me {
+			go rf.sendElection(args, i)
+		}
+	}
 
+	go rf.reElection()
+
+	rf.mu.Lock()
+	term := rf.currentTerm
+	rf.mu.Unlock()
+	replys := 0
+	myvotes := 1
+	for replys < len(rf.peers)-1 && myvotes*2 < len(rf.peers)+1 {
+		reply := <-rf.voteChan
+		rf.LogfKey("re", " reply vote granted %v, for %v, term %v", reply.VoteGranted, reply.VotedFor, reply.Term)
+		replys++
+		if reply.VoteGranted && reply.VotedFor == rf.me {
+			myvotes++
+		}
+	}
+
+	rf.LogfKey("re", " get reply %v, votes %v", replys, myvotes)
+	// self select
+	rf.mu.Lock()
+	checkterm := rf.currentTerm
+	rf.mu.Unlock()
+	if myvotes*2 >= len(rf.peers)+1 && term == checkterm {
 		rf.mu.Lock()
-		rf.role = Candidate
-		rf.leader = -1
-		rf.votedFor = rf.me
-		rf.currentTerm++
-		rf.voteChan = make(chan *RequestVoteReply, len(rf.peers)-1)
+		rf.role = Leader
+		rf.leader = rf.me
+		rf.votedFor = -1
 		rf.mu.Unlock()
-
-		rf.LogfKey("re", " candidate for term %v", rf.currentTerm)
-		args := &RequestVoteArgs{
-			Term:        rf.currentTerm,
-			CandidateId: rf.me,
-		}
-		for i, _ := range rf.peers {
-			if i != rf.me {
-				go rf.sendElection(args, i)
-			}
-		}
-
-		term := rf.currentTerm
-		go rf.reElection()
-
-		replys := 0
-		myvotes := 1
-		for replys < len(rf.peers)-1 && myvotes*2 < len(rf.peers)+1 {
-			reply := <-rf.voteChan
-			rf.LogfKey("re", " reply vote granted %v, for %v, term %v", reply.VoteGranted, reply.VotedFor, reply.Term)
-			replys++
-			if reply.VoteGranted && reply.VotedFor == rf.me {
-				myvotes++
-			}
-		}
-
-		rf.LogfKey("re", " get reply %v, votes %v", replys, myvotes)
-		// self select
-		if myvotes*2 >= len(rf.peers)+1 && term == rf.currentTerm {
-			rf.mu.Lock()
-			rf.role = Leader
-			rf.leader = rf.me
-			rf.votedFor = -1
-			rf.mu.Unlock()
-			rf.LogKey("re", " i'm leader ")
-		}
-
+		rf.LogKey("re", " i'm leader ")
 	}
 }
 
 func (rf *Raft) reElection() {
 
-	dur := time.Duration(rand.Intn(500)) * time.Millisecond
+	dur := time.Duration(500+rand.Intn(200)) * time.Millisecond
 	time.Sleep(dur)
 	if rf.leader < 0 {
 		rf.LogfKey("re", "having wait %v ,now reElection", dur)
@@ -291,11 +294,14 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	// A
 	// stale candidate
 	rf.LogfKey("re", " receive requestVote: candidate %v, term %v", args.CandidateId, args.Term)
-	if args.Term < rf.currentTerm {
-		reply.Term = rf.currentTerm
+	rf.mu.Lock()
+	term := rf.currentTerm
+	rf.mu.Unlock()
+	if args.Term < term {
+		reply.Term = term
 		reply.VoteGranted = false
 		return
-	} else if args.Term > rf.currentTerm {
+	} else if args.Term > term {
 		rf.mu.Lock()
 		rf.currentTerm = args.Term
 		rf.votedFor = args.CandidateId
@@ -305,7 +311,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 		reply.VoteGranted = true
 		reply.VotedFor = args.CandidateId
 	} else {
-		reply.Term = rf.currentTerm
+		reply.Term = term
 		reply.VoteGranted = true
 		reply.VotedFor = rf.votedFor
 	}
@@ -314,9 +320,12 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 
 func (rf *Raft) Beats(args *AppendEntriesArgs, reply *AppendEntriesReply) {
 	// A
+	rf.mu.Lock()
+	term := rf.currentTerm
+	rf.mu.Unlock()
 	rf.LogfKey("re", "hear beats from %v, term %v", args.LeaderId, args.Term)
-	if args.Term < rf.currentTerm {
-		reply.Term = rf.currentTerm
+	if args.Term < term {
+		reply.Term = term
 		reply.Success = false
 		return
 	}
@@ -326,8 +335,8 @@ func (rf *Raft) Beats(args *AppendEntriesArgs, reply *AppendEntriesReply) {
 	rf.leader = args.LeaderId
 	rf.votedFor = -1
 	rf.currentTerm = args.Term
-	rf.mu.Unlock()
 	reply.Term = rf.currentTerm
+	rf.mu.Unlock()
 	reply.Success = true
 	return
 }
@@ -424,7 +433,10 @@ func (rf *Raft) ticker() {
 		// Your code here to check if a leader election should
 		// be started and to randomize sleeping time using
 		// time.Sleep().
-		switch rf.role {
+		rf.mu.Lock()
+		role := rf.role
+		rf.mu.Unlock()
+		switch role {
 		case Leader:
 			go rf.sendBeats()
 			dur := time.Millisecond * time.Duration(rf.beatsInterval)
@@ -468,6 +480,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.peers = peers
 	rf.persister = persister
 	rf.me = me
+	rf.mu = &sync.Mutex{}
 
 	// Your initialization code here (2A, 2B, 2C).
 	// 2A
