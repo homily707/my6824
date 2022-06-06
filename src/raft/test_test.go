@@ -66,6 +66,7 @@ func TestReElection2A(t *testing.T) {
 	// if the old leader rejoins, that shouldn't
 	// disturb the new leader. and the old leader
 	// should switch to follower.
+	fmt.Println("leader back")
 	cfg.connect(leader1)
 	leader2 := cfg.checkOneLeader()
 
