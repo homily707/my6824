@@ -8,10 +8,10 @@ import (
 )
 
 // Debugging
-const Debug = true
+const Debug = false
 const LogKey = "log"
 
-var icon = []string{"📕️", "🧡", "💚", "💙", "💜", "💛", "🤍", "🤎", "💓"}
+var icon = []string{"🧡", "💚", "💙", "💜", "💛", "🤍", "🤎", "💓"}
 
 func RaftPrint(index int, role Role, term int, leader int, format string) (n int, err error) {
 	i := index % len(icon)
@@ -73,6 +73,14 @@ func RaftPrintf(index int, role Role, term int, leader int, format string, a ...
 func DPrintf(format string, a ...interface{}) (n int, err error) {
 	if Debug {
 		log.Printf(format, a...)
+	}
+	return
+}
+
+func DmePrintf(me int, format string, a ...interface{}) (n int, err error) {
+	if Debug {
+		i := me % len(icon)
+		log.Printf(icon[i]+strconv.Itoa(me)+"] "+format, a...)
 	}
 	return
 }

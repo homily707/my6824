@@ -78,7 +78,7 @@ type Raft struct {
 	me        int                 // this peer's index into peers[]
 	dead      int32               // set by Kill()
 	applyChan chan ApplyMsg
-	logChan   chan LogEntry
+	//logChan   chan LogEntry
 
 	// Your data here (2A, 2B, 2C).
 	// A
@@ -226,8 +226,9 @@ func (rf *Raft) sendBeats() {
 		term := rf.currentTerm
 		rf.mu.Unlock()
 		args := &AppendEntriesArgs{
-			Term:     term,
-			LeaderId: rf.me,
+			Term:         term,
+			LeaderId:     rf.me,
+			LeaderCommit: rf.commitIndex,
 		}
 		reply := &AppendEntriesReply{}
 		rf.LogKey("re", "beats on")
@@ -344,6 +345,7 @@ func (rf *Raft) Beats(args *AppendEntriesArgs, reply *AppendEntriesReply) {
 	// A
 	rf.mu.Lock()
 	term := rf.currentTerm
+	reply.Term = term
 	rf.mu.Unlock()
 	rf.LogfKey("re", "hear beats from %v, term %v", args.LeaderId, args.Term)
 	if args.Term < term {
@@ -357,7 +359,12 @@ func (rf *Raft) Beats(args *AppendEntriesArgs, reply *AppendEntriesReply) {
 	rf.leader = args.LeaderId
 	rf.votedFor = -1
 	rf.currentTerm = args.Term
-	reply.Term = rf.currentTerm
+	DmePrintf(rf.me, "hear beats")
+	if args.LeaderCommit > rf.commitIndex {
+		rf.commitIndex = min(args.LeaderCommit, len(rf.logs))
+		DmePrintf(rf.me, "hear beats update commit ")
+		go rf.Apply()
+	}
 	rf.mu.Unlock()
 	reply.Success = true
 	return
@@ -393,12 +400,10 @@ func (rf *Raft) LogEntries(args *AppendEntriesArgs, reply *AppendEntriesReply) {
 	//Dprintf( "reach rule 5")
 	//rule 5
 	if args.LeaderCommit > rf.commitIndex {
-		//Dprintf( "reach min")
 		rf.commitIndex = min(args.LeaderCommit, len(rf.logs))
-		//rf.LogKey("log", "out min")
 	}
 	go rf.Apply()
-	//rf.LogfKey("log", "accept log,my  commit is %v", rf.commitIndex)
+	DmePrintf(rf.me, "accept log,my commit is %v", rf.commitIndex)
 	reply.Success = true
 	// rf.LogKey("log", "ok ok")
 	return
@@ -471,44 +476,36 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	rf.mu.Lock()
 	isLeader := rf.role == Leader
 	rf.mu.Unlock()
-
 	// Your code here (2B).
 	if !isLeader {
 		return index, term, isLeader
 	}
 
-	index, term = rf.nextLogIndex, rf.currentTerm
-	rf.nextLogIndex++
-	DPrintf("%v: go send a command", rf.me)
-	go rf.sendCommand(index, command)
-	DPrintf("%v: receive a command", rf.me)
+	DmePrintf(rf.me, "receive a command")
+	index, term = rf.handleCommand(command)
+
 	return index, term, isLeader
 }
 
-func (rf *Raft) sendCommand(index int, command interface{}) {
+func (rf *Raft) handleCommand(command interface{}) (int, int) {
+	rf.mu.Lock()
 	entry := LogEntry{
-		Index: index,
+		Index: rf.nextLogIndex,
 		Term:  rf.currentTerm,
 		Data:  command,
 	}
-	rf.logChan <- entry
-}
+	rf.logs = append(rf.logs, entry)
+	rf.nextLogIndex++
+	//rf.LogKey("log", "reach here")
+	rf.mu.Unlock()
 
-func (rf *Raft) handleCommand() {
-	for {
-		entry := <-rf.logChan
-		rf.mu.Lock()
-		rf.logs = append(rf.logs, entry)
-		rf.mu.Unlock()
-
-		for i := 0; i < len(rf.peers); i++ {
-			if i == rf.me {
-				continue
-			}
-			go rf.sendLog(i)
+	for i := 0; i < len(rf.peers); i++ {
+		if i == rf.me {
+			continue
 		}
+		go rf.sendLog(i)
 	}
-
+	return entry.Index, entry.Term
 }
 
 func (rf *Raft) sendLog(i int) {
@@ -531,14 +528,16 @@ func (rf *Raft) sendLog(i int) {
 		rf.mu.Unlock()
 
 		reply := &AppendEntriesReply{}
-		DPrintf("sending entry from [%v, %v) to %v.(prev term/index %v/%v) ",
+		DmePrintf(rf.me, "sending entry from [%v, %v) to %v.(prev term/index %v/%v) ",
 			nextIndex, rf.nextLogIndex, i, args.PrevLogTerm, args.PrevLogIndex)
 		rf.sendAppendEntries(i, "Raft.LogEntries", args, reply)
 		if reply.Success {
 			rf.mu.Lock()
 			rf.nextIndexs[i]++
 			rf.matchIndexs[i] = entries[len(entries)-1].Index
+			DmePrintf(rf.me, "success,update %v next to %v, match to %v", i, rf.nextIndexs[i], rf.matchIndexs[i])
 			rf.mu.Unlock()
+			go rf.Commit()
 			break
 		} else {
 			// TODO bisect to accelerate
@@ -550,22 +549,24 @@ func (rf *Raft) sendLog(i int) {
 func (rf *Raft) Commit() {
 	matchIndexs := make([]int, len(rf.peers))
 	rf.mu.Lock()
+	DmePrintf(rf.me, "check commit")
 	copy(matchIndexs, rf.matchIndexs)
 	sort.Ints(matchIndexs)
 	halfMatch := matchIndexs[len(rf.peers)/2]
 
 	if halfMatch > rf.commitIndex {
+		DmePrintf(rf.me, "half match %v beyond commit %v", halfMatch, rf.commitIndex)
 		rf.commitIndex = halfMatch
+		rf.Apply()
 	}
 	rf.mu.Unlock()
 }
 
 func (rf *Raft) Apply() {
 	commitIndex := rf.commitIndex
+	DmePrintf(rf.me, "commit is %v,apply is %v", commitIndex, rf.lastApplied)
 	for i := rf.lastApplied + 1; i <= commitIndex; i++ {
-		rf.mu.Lock()
 		log := rf.logs[i]
-		rf.mu.Unlock()
 		rf.applyChan <- ApplyMsg{
 			CommandValid:  true,
 			Command:       log.Data,
@@ -575,7 +576,7 @@ func (rf *Raft) Apply() {
 			SnapshotTerm:  0,
 			SnapshotIndex: 0,
 		}
-		DPrintf("[%v] apply log %v", rf.me, i)
+		DmePrintf(rf.me, "applymsg %v", i)
 	}
 	rf.lastApplied = commitIndex
 }
@@ -615,14 +616,16 @@ func (rf *Raft) ticker() {
 		switch role {
 		case Leader:
 			go rf.sendBeats()
-			go rf.Commit()
+			//go rf.Commit()
 			dur := time.Millisecond * time.Duration(rf.beatsInterval)
 			rf.LogfKey("beats", "leader sleep %v", dur)
 			time.Sleep(dur)
 		case Follower:
+			rf.mu.Lock()
 			if rf.votedFor != -1 {
 				continue
 			}
+			rf.mu.Unlock()
 			dur := time.Millisecond * time.Duration(250+rand.Intn(500))
 			rf.Logf("follower sleep %v", dur)
 			time.Sleep(dur)
@@ -658,6 +661,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.persister = persister
 	rf.me = me
 	rf.mu = &sync.Mutex{}
+	rf.applyChan = applyCh
 
 	// Your initialization code here (2A, 2B, 2C).
 	// 2A
@@ -667,8 +671,8 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.votedFor = -1
 
 	// 2B
-	rf.commitIndex = -1
-	rf.lastApplied = -1
+	rf.commitIndex = 0
+	rf.lastApplied = 0
 	rf.nextIndexs = make([]int, len(rf.peers))
 	rf.matchIndexs = make([]int, len(rf.peers))
 	for i := 0; i < len(rf.peers); i++ {
@@ -687,7 +691,6 @@ func Make(peers []*labrpc.ClientEnd, me int,
 
 	// start ticker goroutine to start elections
 	go rf.ticker()
-	go rf.handleCommand()
 
 	return rf
 }
