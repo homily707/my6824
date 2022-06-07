@@ -21,7 +21,6 @@ import (
 	"log"
 	"math/rand"
 	"sort"
-
 	//	"bytes"
 	"sync"
 	"sync/atomic"
@@ -389,11 +388,17 @@ func (rf *Raft) LogEntries(args *AppendEntriesArgs, reply *AppendEntriesReply) {
 	}
 	//rule 3
 	if rf.logs[args.PrevLogIndex].Term != args.PrevLogTerm {
-		DPrintf("index ok term not")
+		DmePrintf(rf.me, "index %v ok term %v not", args.PrevLogIndex, args.PrevLogTerm)
 		rf.logs = rf.logs[0:args.PrevLogIndex]
 		reply.Success = false
 		return
 	}
+	if args.Entries == nil {
+		DmePrintf(rf.me, "check confirm index %v term %v ", args.PrevLogIndex, args.PrevLogTerm)
+		reply.Success = true
+		return
+	}
+
 	//rule 4
 	//Dprintf( "reach rule 4")
 	rf.logs = append(rf.logs[0:args.PrevLogIndex+1], args.Entries...)
@@ -403,7 +408,17 @@ func (rf *Raft) LogEntries(args *AppendEntriesArgs, reply *AppendEntriesReply) {
 		rf.commitIndex = min(args.LeaderCommit, len(rf.logs))
 	}
 	go rf.Apply()
-	DmePrintf(rf.me, "accept log,my commit is %v", rf.commitIndex)
+	//DmePrintf(rf.me, "accept log,my commit is %v", rf.commitIndex)
+	//if len(rf.logs)%5 == 0 {
+	//	logs := rf.logs
+	//	builder := strings.Builder{}
+	//	builder.WriteString("{ ")
+	//	for _, v := range logs {
+	//		builder.WriteString(fmt.Sprintf("%v/%v ", v.Term, v.Index))
+	//	}
+	//	builder.WriteString(" }")
+	//	DmePrintf(rf.me, "log is %v", builder.String())
+	//}
 	reply.Success = true
 	// rf.LogKey("log", "ok ok")
 	return
@@ -494,6 +509,7 @@ func (rf *Raft) handleCommand(command interface{}) (int, int) {
 		Term:  rf.currentTerm,
 		Data:  command,
 	}
+	DmePrintf(rf.me, "new log term/log %v/%v", rf.currentTerm, rf.nextLogIndex)
 	rf.logs = append(rf.logs, entry)
 	rf.nextLogIndex++
 	//rf.LogKey("log", "reach here")
@@ -509,6 +525,33 @@ func (rf *Raft) handleCommand(command interface{}) (int, int) {
 }
 
 func (rf *Raft) sendLog(i int) {
+	// sync nextIndex first
+	for {
+		rf.mu.Lock()
+		nextIndex := rf.nextIndexs[i]
+		entry := rf.logs[nextIndex-1]
+		args := &AppendEntriesArgs{
+			Term:         rf.currentTerm,
+			LeaderId:     rf.me,
+			PrevLogTerm:  entry.Term,
+			PrevLogIndex: entry.Index,
+			LeaderCommit: rf.commitIndex,
+		}
+		rf.mu.Unlock()
+		reply := &AppendEntriesReply{}
+		//DmePrintf(rf.me, "sending entry from [%v, %v) to %v.(prev term/index %v/%v) ",
+		//	nextIndex, rf.nextLogIndex, i, args.PrevLogTerm, args.PrevLogIndex)
+		rf.sendAppendEntries(i, "Raft.LogEntries", args, reply)
+		if reply.Success {
+			DmePrintf(rf.me, "check index %v success", nextIndex)
+			break
+		} else {
+			// TODO bisect to accelerate
+			DmePrintf(rf.me, "check index %v failed", nextIndex)
+			rf.nextIndexs[i]--
+		}
+	}
+
 	for {
 		rf.mu.Lock()
 		nextIndex := rf.nextIndexs[i]
@@ -522,7 +565,7 @@ func (rf *Raft) sendLog(i int) {
 			LeaderCommit: rf.commitIndex,
 		}
 		if nextIndex > 0 {
-			args.PrevLogTerm = rf.logs[nextIndex-1].Index
+			args.PrevLogTerm = rf.logs[nextIndex-1].Term
 			args.PrevLogIndex = rf.logs[nextIndex-1].Index
 		}
 		rf.mu.Unlock()
@@ -533,7 +576,7 @@ func (rf *Raft) sendLog(i int) {
 		rf.sendAppendEntries(i, "Raft.LogEntries", args, reply)
 		if reply.Success {
 			rf.mu.Lock()
-			rf.nextIndexs[i]++
+			rf.nextIndexs[i] = rf.nextLogIndex
 			rf.matchIndexs[i] = entries[len(entries)-1].Index
 			DmePrintf(rf.me, "success,update %v next to %v, match to %v", i, rf.nextIndexs[i], rf.matchIndexs[i])
 			rf.mu.Unlock()
@@ -549,13 +592,13 @@ func (rf *Raft) sendLog(i int) {
 func (rf *Raft) Commit() {
 	matchIndexs := make([]int, len(rf.peers))
 	rf.mu.Lock()
-	DmePrintf(rf.me, "check commit")
+	//DmePrintf(rf.me, "check commit")
 	copy(matchIndexs, rf.matchIndexs)
 	sort.Ints(matchIndexs)
 	halfMatch := matchIndexs[len(rf.peers)/2]
 
 	if halfMatch > rf.commitIndex {
-		DmePrintf(rf.me, "half match %v beyond commit %v", halfMatch, rf.commitIndex)
+		//DmePrintf(rf.me, "half match %v beyond commit %v", halfMatch, rf.commitIndex)
 		rf.commitIndex = halfMatch
 		rf.Apply()
 	}
@@ -564,7 +607,7 @@ func (rf *Raft) Commit() {
 
 func (rf *Raft) Apply() {
 	commitIndex := rf.commitIndex
-	DmePrintf(rf.me, "commit is %v,apply is %v", commitIndex, rf.lastApplied)
+	//DmePrintf(rf.me, "commit is %v,apply is %v", commitIndex, rf.lastApplied)
 	for i := rf.lastApplied + 1; i <= commitIndex; i++ {
 		log := rf.logs[i]
 		rf.applyChan <- ApplyMsg{
